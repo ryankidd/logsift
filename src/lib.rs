@@ -20,3 +20,34 @@ pub fn run<R: BufRead, W: Write>(input: R, output: &mut W) -> io::Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn passes_through_valid_json_lines() {
+        let input =
+            b"{\"level\":\"info\",\"msg\":\"starting\"}\n{\"level\":\"error\",\"msg\":\"boom\"}\n"
+                as &[u8];
+        let mut output = Vec::new();
+
+        run(input, &mut output).unwrap();
+
+        let got = String::from_utf8(output).unwrap();
+        assert_eq!(
+            got,
+            "{\"level\":\"info\",\"msg\":\"starting\"}\n{\"level\":\"error\",\"msg\":\"boom\"}\n"
+        );
+    }
+
+    #[test]
+    fn drops_invalid_json_lines() {
+        let input = b"{\"ok\":true}\nnot json\n" as &[u8];
+        let mut output = Vec::new();
+
+        run(input, &mut output).unwrap();
+
+        assert_eq!(String::from_utf8(output).unwrap(), "{\"ok\":true}\n");
+    }
+}
