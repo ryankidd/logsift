@@ -1,5 +1,6 @@
 use std::io::{self, BufRead, Write};
 
+use chrono::{DateTime, FixedOffset};
 use serde_json::Value;
 
 /// A `--field PATH=VALUE` filter matched against a dotted path into a JSON
@@ -46,14 +47,73 @@ impl FieldFilter {
     }
 }
 
+/// A `--since`/`--until` time-range filter matched against a dotted path
+/// into a JSON object, e.g. the default `timestamp` field or a nested one
+/// like `meta.timestamp`. Bounds are inclusive; a line whose timestamp
+/// field is missing or not a valid RFC 3339 string is excluded.
+#[derive(Debug)]
+pub struct TimeFilter {
+    field: Vec<String>,
+    since: Option<DateTime<FixedOffset>>,
+    until: Option<DateTime<FixedOffset>>,
+}
+
+impl TimeFilter {
+    /// Dotted path used for the timestamp field when `--time-field` is not
+    /// given.
+    pub const DEFAULT_FIELD: &'static str = "timestamp";
+
+    /// Builds a filter that reads the timestamp from `field` (a dotted
+    /// path) and keeps lines whose timestamp falls within `[since, until]`.
+    /// Either bound may be omitted.
+    pub fn new(
+        field: &str,
+        since: Option<DateTime<FixedOffset>>,
+        until: Option<DateTime<FixedOffset>>,
+    ) -> Self {
+        TimeFilter {
+            field: field.split('.').map(str::to_string).collect(),
+            since,
+            until,
+        }
+    }
+
+    fn matches(&self, root: &Value) -> bool {
+        let mut current = root;
+        for key in &self.field {
+            match current.get(key) {
+                Some(next) => current = next,
+                None => return false,
+            }
+        }
+
+        let Some(text) = current.as_str() else {
+            return false;
+        };
+        let Ok(timestamp) = DateTime::parse_from_rfc3339(text) else {
+            return false;
+        };
+
+        if self.since.is_some_and(|since| timestamp < since) {
+            return false;
+        }
+        if self.until.is_some_and(|until| timestamp > until) {
+            return false;
+        }
+
+        true
+    }
+}
+
 /// Reads newline-delimited JSON from `input`, validates each non-blank
 /// line as JSON, and writes lines that satisfy every filter in `filters`
-/// back out to `output` unchanged. Invalid lines are reported on stderr
-/// and dropped.
+/// and `time_filter` (if given) back out to `output` unchanged. Invalid
+/// lines are reported on stderr and dropped.
 pub fn run<R: BufRead, W: Write>(
     input: R,
     output: &mut W,
     filters: &[FieldFilter],
+    time_filter: Option<&TimeFilter>,
 ) -> io::Result<()> {
     for (line_number, line) in input.lines().enumerate() {
         let line = line?;
@@ -63,7 +123,12 @@ pub fn run<R: BufRead, W: Write>(
 
         match serde_json::from_str::<Value>(&line) {
             Ok(value) => {
-                if filters.iter().all(|f| f.matches(&value)) {
+                let time_ok = match time_filter {
+                    Some(time_filter) => time_filter.matches(&value),
+                    None => true,
+                };
+
+                if time_ok && filters.iter().all(|f| f.matches(&value)) {
                     writeln!(output, "{line}")?;
                 }
             }
@@ -87,7 +152,7 @@ mod tests {
                 as &[u8];
         let mut output = Vec::new();
 
-        run(input, &mut output, &[]).unwrap();
+        run(input, &mut output, &[], None).unwrap();
 
         let got = String::from_utf8(output).unwrap();
         assert_eq!(
@@ -101,7 +166,7 @@ mod tests {
         let input = b"{\"ok\":true}\nnot json\n" as &[u8];
         let mut output = Vec::new();
 
-        run(input, &mut output, &[]).unwrap();
+        run(input, &mut output, &[], None).unwrap();
 
         assert_eq!(String::from_utf8(output).unwrap(), "{\"ok\":true}\n");
     }
@@ -114,7 +179,7 @@ mod tests {
         let mut output = Vec::new();
         let filters = [FieldFilter::parse("level=error").unwrap()];
 
-        run(input, &mut output, &filters).unwrap();
+        run(input, &mut output, &filters, None).unwrap();
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
@@ -129,7 +194,7 @@ mod tests {
         let mut output = Vec::new();
         let filters = [FieldFilter::parse("meta.level=error").unwrap()];
 
-        run(input, &mut output, &filters).unwrap();
+        run(input, &mut output, &filters, None).unwrap();
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
@@ -143,7 +208,7 @@ mod tests {
         let mut output = Vec::new();
         let filters = [FieldFilter::parse("code=404").unwrap()];
 
-        run(input, &mut output, &filters).unwrap();
+        run(input, &mut output, &filters, None).unwrap();
 
         assert_eq!(String::from_utf8(output).unwrap(), "{\"code\":404}\n");
     }
@@ -154,7 +219,7 @@ mod tests {
         let mut output = Vec::new();
         let filters = [FieldFilter::parse("meta.level=error").unwrap()];
 
-        run(input, &mut output, &filters).unwrap();
+        run(input, &mut output, &filters, None).unwrap();
 
         assert_eq!(String::from_utf8(output).unwrap(), "");
     }
@@ -169,7 +234,7 @@ mod tests {
             FieldFilter::parse("svc=api").unwrap(),
         ];
 
-        run(input, &mut output, &filters).unwrap();
+        run(input, &mut output, &filters, None).unwrap();
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
