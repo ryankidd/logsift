@@ -251,4 +251,131 @@ mod tests {
     fn field_filter_parse_rejects_empty_path() {
         assert!(FieldFilter::parse("=error").is_err());
     }
+
+    fn rfc3339(s: &str) -> DateTime<FixedOffset> {
+        DateTime::parse_from_rfc3339(s).unwrap()
+    }
+
+    #[test]
+    fn time_filter_since_keeps_lines_at_or_after_bound() {
+        let input =
+            b"{\"timestamp\":\"2024-01-01T00:00:00Z\"}\n{\"timestamp\":\"2024-01-03T00:00:00Z\"}\n"
+                as &[u8];
+        let mut output = Vec::new();
+        let time_filter = TimeFilter::new("timestamp", Some(rfc3339("2024-01-02T00:00:00Z")), None);
+
+        run(input, &mut output, &[], Some(&time_filter)).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "{\"timestamp\":\"2024-01-03T00:00:00Z\"}\n"
+        );
+    }
+
+    #[test]
+    fn time_filter_until_keeps_lines_at_or_before_bound() {
+        let input =
+            b"{\"timestamp\":\"2024-01-01T00:00:00Z\"}\n{\"timestamp\":\"2024-01-03T00:00:00Z\"}\n"
+                as &[u8];
+        let mut output = Vec::new();
+        let time_filter = TimeFilter::new("timestamp", None, Some(rfc3339("2024-01-02T00:00:00Z")));
+
+        run(input, &mut output, &[], Some(&time_filter)).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "{\"timestamp\":\"2024-01-01T00:00:00Z\"}\n"
+        );
+    }
+
+    #[test]
+    fn time_filter_since_and_until_keep_lines_within_range() {
+        let input = b"{\"timestamp\":\"2024-01-01T00:00:00Z\"}\n{\"timestamp\":\"2024-01-02T00:00:00Z\"}\n{\"timestamp\":\"2024-01-03T00:00:00Z\"}\n"
+            as &[u8];
+        let mut output = Vec::new();
+        let time_filter = TimeFilter::new(
+            "timestamp",
+            Some(rfc3339("2024-01-02T00:00:00Z")),
+            Some(rfc3339("2024-01-02T00:00:00Z")),
+        );
+
+        run(input, &mut output, &[], Some(&time_filter)).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "{\"timestamp\":\"2024-01-02T00:00:00Z\"}\n"
+        );
+    }
+
+    #[test]
+    fn time_filter_bounds_are_inclusive() {
+        let bound = rfc3339("2024-01-02T00:00:00Z");
+        let input = b"{\"timestamp\":\"2024-01-02T00:00:00Z\"}\n" as &[u8];
+        let mut output = Vec::new();
+        let time_filter = TimeFilter::new("timestamp", Some(bound), Some(bound));
+
+        run(input, &mut output, &[], Some(&time_filter)).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "{\"timestamp\":\"2024-01-02T00:00:00Z\"}\n"
+        );
+    }
+
+    #[test]
+    fn time_filter_drops_lines_missing_the_field() {
+        let input = b"{\"msg\":\"no timestamp here\"}\n" as &[u8];
+        let mut output = Vec::new();
+        let time_filter = TimeFilter::new("timestamp", Some(rfc3339("2024-01-01T00:00:00Z")), None);
+
+        run(input, &mut output, &[], Some(&time_filter)).unwrap();
+
+        assert_eq!(String::from_utf8(output).unwrap(), "");
+    }
+
+    #[test]
+    fn time_filter_drops_lines_with_unparseable_timestamp() {
+        let input = b"{\"timestamp\":\"not a timestamp\"}\n" as &[u8];
+        let mut output = Vec::new();
+        let time_filter = TimeFilter::new("timestamp", Some(rfc3339("2024-01-01T00:00:00Z")), None);
+
+        run(input, &mut output, &[], Some(&time_filter)).unwrap();
+
+        assert_eq!(String::from_utf8(output).unwrap(), "");
+    }
+
+    #[test]
+    fn time_filter_matches_dotted_nested_field() {
+        let input = b"{\"meta\":{\"timestamp\":\"2024-01-03T00:00:00Z\"}}\n{\"meta\":{\"timestamp\":\"2024-01-01T00:00:00Z\"}}\n"
+            as &[u8];
+        let mut output = Vec::new();
+        let time_filter = TimeFilter::new(
+            "meta.timestamp",
+            Some(rfc3339("2024-01-02T00:00:00Z")),
+            None,
+        );
+
+        run(input, &mut output, &[], Some(&time_filter)).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "{\"meta\":{\"timestamp\":\"2024-01-03T00:00:00Z\"}}\n"
+        );
+    }
+
+    #[test]
+    fn time_filter_and_field_filter_combine_with_and() {
+        let input = b"{\"level\":\"error\",\"timestamp\":\"2024-01-01T00:00:00Z\"}\n{\"level\":\"error\",\"timestamp\":\"2024-01-03T00:00:00Z\"}\n{\"level\":\"info\",\"timestamp\":\"2024-01-03T00:00:00Z\"}\n"
+            as &[u8];
+        let mut output = Vec::new();
+        let filters = [FieldFilter::parse("level=error").unwrap()];
+        let time_filter = TimeFilter::new("timestamp", Some(rfc3339("2024-01-02T00:00:00Z")), None);
+
+        run(input, &mut output, &filters, Some(&time_filter)).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "{\"level\":\"error\",\"timestamp\":\"2024-01-03T00:00:00Z\"}\n"
+        );
+    }
 }
