@@ -105,4 +105,85 @@ mod tests {
 
         assert_eq!(String::from_utf8(output).unwrap(), "{\"ok\":true}\n");
     }
+
+    #[test]
+    fn field_filter_keeps_only_matching_lines() {
+        let input =
+            b"{\"level\":\"info\",\"msg\":\"starting\"}\n{\"level\":\"error\",\"msg\":\"boom\"}\n"
+                as &[u8];
+        let mut output = Vec::new();
+        let filters = [FieldFilter::parse("level=error").unwrap()];
+
+        run(input, &mut output, &filters).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "{\"level\":\"error\",\"msg\":\"boom\"}\n"
+        );
+    }
+
+    #[test]
+    fn field_filter_matches_dotted_nested_path() {
+        let input =
+            b"{\"meta\":{\"level\":\"error\"}}\n{\"meta\":{\"level\":\"info\"}}\n" as &[u8];
+        let mut output = Vec::new();
+        let filters = [FieldFilter::parse("meta.level=error").unwrap()];
+
+        run(input, &mut output, &filters).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "{\"meta\":{\"level\":\"error\"}}\n"
+        );
+    }
+
+    #[test]
+    fn field_filter_matches_non_string_values() {
+        let input = b"{\"code\":404}\n{\"code\":200}\n" as &[u8];
+        let mut output = Vec::new();
+        let filters = [FieldFilter::parse("code=404").unwrap()];
+
+        run(input, &mut output, &filters).unwrap();
+
+        assert_eq!(String::from_utf8(output).unwrap(), "{\"code\":404}\n");
+    }
+
+    #[test]
+    fn field_filter_drops_lines_missing_the_path() {
+        let input = b"{\"level\":\"error\"}\n" as &[u8];
+        let mut output = Vec::new();
+        let filters = [FieldFilter::parse("meta.level=error").unwrap()];
+
+        run(input, &mut output, &filters).unwrap();
+
+        assert_eq!(String::from_utf8(output).unwrap(), "");
+    }
+
+    #[test]
+    fn multiple_field_filters_are_combined_with_and() {
+        let input = b"{\"level\":\"error\",\"svc\":\"api\"}\n{\"level\":\"error\",\"svc\":\"db\"}\n"
+            as &[u8];
+        let mut output = Vec::new();
+        let filters = [
+            FieldFilter::parse("level=error").unwrap(),
+            FieldFilter::parse("svc=api").unwrap(),
+        ];
+
+        run(input, &mut output, &filters).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "{\"level\":\"error\",\"svc\":\"api\"}\n"
+        );
+    }
+
+    #[test]
+    fn field_filter_parse_rejects_missing_equals() {
+        assert!(FieldFilter::parse("level").is_err());
+    }
+
+    #[test]
+    fn field_filter_parse_rejects_empty_path() {
+        assert!(FieldFilter::parse("=error").is_err());
+    }
 }
