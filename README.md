@@ -36,12 +36,24 @@ or isn't a valid RFC 3339 string is dropped whenever `--since` or `--until`
 is active. `--since`/`--until` combine with `--field` filters: a line must
 satisfy all of them.
 
+Pass `--format compact` to print a single-line summary instead of the raw
+JSON:
+
+```bash
+logsift --format compact path/to/log.ndjson
+```
+
+Compact lines are `timestamp level message`, read from the top-level
+`timestamp` and `level` fields and a `message` field (falling back to
+`msg`). A missing field is printed as `-`. The default format, `raw`,
+prints each line unchanged.
+
 ## Status
 
 Early and under active development. Currently reads newline-delimited JSON
 from a file or stdin, passes valid lines through, and supports `--field`
-filtering on dotted paths and `--since`/`--until` time-range filtering. An
-alternate compact output format is in progress.
+filtering on dotted paths, `--since`/`--until` time-range filtering, and a
+compact output format via `--format`.
 
 ## Development
 
