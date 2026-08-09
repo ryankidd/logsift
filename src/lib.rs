@@ -1,7 +1,37 @@
 use std::io::{self, BufRead, Write};
 
 use chrono::{DateTime, FixedOffset};
+use clap::ValueEnum;
 use serde_json::Value;
+
+/// Output format for lines that pass all filters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum OutputFormat {
+    /// Print the original JSON line unchanged (the default).
+    #[default]
+    Raw,
+    /// Print a single-line summary of `timestamp`, `level`, and
+    /// `message`/`msg`, in that order, for easier terminal reading.
+    Compact,
+}
+
+/// Writes a compact single-line summary of `value`: `timestamp`, `level`,
+/// and `message` (falling back to `msg`), each read from the top level of
+/// the object. A missing or non-string field is rendered as `-`.
+fn write_compact<W: Write>(output: &mut W, value: &Value) -> io::Result<()> {
+    let timestamp = value
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let level = value.get("level").and_then(Value::as_str).unwrap_or("-");
+    let message = value
+        .get("message")
+        .or_else(|| value.get("msg"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+
+    writeln!(output, "{timestamp} {level} {message}")
+}
 
 /// A `--field PATH=VALUE` filter matched against a dotted path into a JSON
 /// object, e.g. `level=error` or `meta.level=error` for nested fields.
@@ -107,13 +137,14 @@ impl TimeFilter {
 
 /// Reads newline-delimited JSON from `input`, validates each non-blank
 /// line as JSON, and writes lines that satisfy every filter in `filters`
-/// and `time_filter` (if given) back out to `output` unchanged. Invalid
+/// and `time_filter` (if given) back out to `output` in `format`. Invalid
 /// lines are reported on stderr and dropped.
 pub fn run<R: BufRead, W: Write>(
     input: R,
     output: &mut W,
     filters: &[FieldFilter],
     time_filter: Option<&TimeFilter>,
+    format: OutputFormat,
 ) -> io::Result<()> {
     for (line_number, line) in input.lines().enumerate() {
         let line = line?;
@@ -129,7 +160,10 @@ pub fn run<R: BufRead, W: Write>(
                 };
 
                 if time_ok && filters.iter().all(|f| f.matches(&value)) {
-                    writeln!(output, "{line}")?;
+                    match format {
+                        OutputFormat::Raw => writeln!(output, "{line}")?,
+                        OutputFormat::Compact => write_compact(output, &value)?,
+                    }
                 }
             }
             Err(err) => {
@@ -152,7 +186,7 @@ mod tests {
                 as &[u8];
         let mut output = Vec::new();
 
-        run(input, &mut output, &[], None).unwrap();
+        run(input, &mut output, &[], None, OutputFormat::Raw).unwrap();
 
         let got = String::from_utf8(output).unwrap();
         assert_eq!(
@@ -166,7 +200,7 @@ mod tests {
         let input = b"{\"ok\":true}\nnot json\n" as &[u8];
         let mut output = Vec::new();
 
-        run(input, &mut output, &[], None).unwrap();
+        run(input, &mut output, &[], None, OutputFormat::Raw).unwrap();
 
         assert_eq!(String::from_utf8(output).unwrap(), "{\"ok\":true}\n");
     }
@@ -179,7 +213,7 @@ mod tests {
         let mut output = Vec::new();
         let filters = [FieldFilter::parse("level=error").unwrap()];
 
-        run(input, &mut output, &filters, None).unwrap();
+        run(input, &mut output, &filters, None, OutputFormat::Raw).unwrap();
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
@@ -194,7 +228,7 @@ mod tests {
         let mut output = Vec::new();
         let filters = [FieldFilter::parse("meta.level=error").unwrap()];
 
-        run(input, &mut output, &filters, None).unwrap();
+        run(input, &mut output, &filters, None, OutputFormat::Raw).unwrap();
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
@@ -208,7 +242,7 @@ mod tests {
         let mut output = Vec::new();
         let filters = [FieldFilter::parse("code=404").unwrap()];
 
-        run(input, &mut output, &filters, None).unwrap();
+        run(input, &mut output, &filters, None, OutputFormat::Raw).unwrap();
 
         assert_eq!(String::from_utf8(output).unwrap(), "{\"code\":404}\n");
     }
@@ -219,7 +253,7 @@ mod tests {
         let mut output = Vec::new();
         let filters = [FieldFilter::parse("meta.level=error").unwrap()];
 
-        run(input, &mut output, &filters, None).unwrap();
+        run(input, &mut output, &filters, None, OutputFormat::Raw).unwrap();
 
         assert_eq!(String::from_utf8(output).unwrap(), "");
     }
@@ -234,7 +268,7 @@ mod tests {
             FieldFilter::parse("svc=api").unwrap(),
         ];
 
-        run(input, &mut output, &filters, None).unwrap();
+        run(input, &mut output, &filters, None, OutputFormat::Raw).unwrap();
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
@@ -264,7 +298,14 @@ mod tests {
         let mut output = Vec::new();
         let time_filter = TimeFilter::new("timestamp", Some(rfc3339("2024-01-02T00:00:00Z")), None);
 
-        run(input, &mut output, &[], Some(&time_filter)).unwrap();
+        run(
+            input,
+            &mut output,
+            &[],
+            Some(&time_filter),
+            OutputFormat::Raw,
+        )
+        .unwrap();
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
@@ -280,7 +321,14 @@ mod tests {
         let mut output = Vec::new();
         let time_filter = TimeFilter::new("timestamp", None, Some(rfc3339("2024-01-02T00:00:00Z")));
 
-        run(input, &mut output, &[], Some(&time_filter)).unwrap();
+        run(
+            input,
+            &mut output,
+            &[],
+            Some(&time_filter),
+            OutputFormat::Raw,
+        )
+        .unwrap();
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
@@ -299,7 +347,14 @@ mod tests {
             Some(rfc3339("2024-01-02T00:00:00Z")),
         );
 
-        run(input, &mut output, &[], Some(&time_filter)).unwrap();
+        run(
+            input,
+            &mut output,
+            &[],
+            Some(&time_filter),
+            OutputFormat::Raw,
+        )
+        .unwrap();
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
@@ -314,7 +369,14 @@ mod tests {
         let mut output = Vec::new();
         let time_filter = TimeFilter::new("timestamp", Some(bound), Some(bound));
 
-        run(input, &mut output, &[], Some(&time_filter)).unwrap();
+        run(
+            input,
+            &mut output,
+            &[],
+            Some(&time_filter),
+            OutputFormat::Raw,
+        )
+        .unwrap();
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
@@ -328,7 +390,14 @@ mod tests {
         let mut output = Vec::new();
         let time_filter = TimeFilter::new("timestamp", Some(rfc3339("2024-01-01T00:00:00Z")), None);
 
-        run(input, &mut output, &[], Some(&time_filter)).unwrap();
+        run(
+            input,
+            &mut output,
+            &[],
+            Some(&time_filter),
+            OutputFormat::Raw,
+        )
+        .unwrap();
 
         assert_eq!(String::from_utf8(output).unwrap(), "");
     }
@@ -339,7 +408,14 @@ mod tests {
         let mut output = Vec::new();
         let time_filter = TimeFilter::new("timestamp", Some(rfc3339("2024-01-01T00:00:00Z")), None);
 
-        run(input, &mut output, &[], Some(&time_filter)).unwrap();
+        run(
+            input,
+            &mut output,
+            &[],
+            Some(&time_filter),
+            OutputFormat::Raw,
+        )
+        .unwrap();
 
         assert_eq!(String::from_utf8(output).unwrap(), "");
     }
@@ -355,7 +431,14 @@ mod tests {
             None,
         );
 
-        run(input, &mut output, &[], Some(&time_filter)).unwrap();
+        run(
+            input,
+            &mut output,
+            &[],
+            Some(&time_filter),
+            OutputFormat::Raw,
+        )
+        .unwrap();
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
@@ -371,7 +454,14 @@ mod tests {
         let filters = [FieldFilter::parse("level=error").unwrap()];
         let time_filter = TimeFilter::new("timestamp", Some(rfc3339("2024-01-02T00:00:00Z")), None);
 
-        run(input, &mut output, &filters, Some(&time_filter)).unwrap();
+        run(
+            input,
+            &mut output,
+            &filters,
+            Some(&time_filter),
+            OutputFormat::Raw,
+        )
+        .unwrap();
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
