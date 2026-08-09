@@ -11,6 +11,9 @@ cat path/to/log.ndjson | logsift
 Each line is validated as JSON and written back out unchanged; invalid
 lines are reported on stderr and dropped.
 
+Input is read and written one line at a time, so memory use stays flat
+regardless of file size — logsift never buffers the whole file.
+
 Pass `--field` to keep only lines where a field matches a value:
 
 ```bash
