@@ -468,4 +468,56 @@ mod tests {
             "{\"level\":\"error\",\"timestamp\":\"2024-01-03T00:00:00Z\"}\n"
         );
     }
+
+    #[test]
+    fn compact_format_prints_key_fields_in_order() {
+        let input =
+            b"{\"timestamp\":\"2024-01-01T00:00:00Z\",\"level\":\"error\",\"message\":\"boom\"}\n"
+                as &[u8];
+        let mut output = Vec::new();
+
+        run(input, &mut output, &[], None, OutputFormat::Compact).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "2024-01-01T00:00:00Z error boom\n"
+        );
+    }
+
+    #[test]
+    fn compact_format_falls_back_to_msg_field() {
+        let input =
+            b"{\"timestamp\":\"2024-01-01T00:00:00Z\",\"level\":\"info\",\"msg\":\"starting\"}\n"
+                as &[u8];
+        let mut output = Vec::new();
+
+        run(input, &mut output, &[], None, OutputFormat::Compact).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "2024-01-01T00:00:00Z info starting\n"
+        );
+    }
+
+    #[test]
+    fn compact_format_uses_placeholder_for_missing_fields() {
+        let input = b"{\"other\":\"field\"}\n" as &[u8];
+        let mut output = Vec::new();
+
+        run(input, &mut output, &[], None, OutputFormat::Compact).unwrap();
+
+        assert_eq!(String::from_utf8(output).unwrap(), "- - -\n");
+    }
+
+    #[test]
+    fn compact_format_combines_with_field_filter() {
+        let input = b"{\"level\":\"info\",\"message\":\"starting\"}\n{\"level\":\"error\",\"message\":\"boom\"}\n"
+            as &[u8];
+        let mut output = Vec::new();
+        let filters = [FieldFilter::parse("level=error").unwrap()];
+
+        run(input, &mut output, &filters, None, OutputFormat::Compact).unwrap();
+
+        assert_eq!(String::from_utf8(output).unwrap(), "- error boom\n");
+    }
 }
