@@ -31,6 +31,11 @@ struct Cli {
     /// Dotted path to the timestamp field checked by `--since`/`--until`.
     #[arg(long = "time-field", value_name = "PATH", default_value = "timestamp")]
     time_field: String,
+
+    /// Output format: `raw` prints each line unchanged, `compact` prints a
+    /// single-line summary of timestamp, level, and message.
+    #[arg(long, value_enum, default_value = "raw")]
+    format: logsift::OutputFormat,
 }
 
 fn parse_rfc3339(s: &str) -> Result<DateTime<FixedOffset>, String> {
@@ -59,11 +64,17 @@ fn main() -> io::Result<()> {
     match cli.path {
         Some(path) => {
             let reader = BufReader::new(File::open(path)?);
-            logsift::run(reader, &mut out, &filters, time_filter.as_ref())
+            logsift::run(reader, &mut out, &filters, time_filter.as_ref(), cli.format)
         }
         None => {
             let stdin = io::stdin();
-            logsift::run(stdin.lock(), &mut out, &filters, time_filter.as_ref())
+            logsift::run(
+                stdin.lock(),
+                &mut out,
+                &filters,
+                time_filter.as_ref(),
+                cli.format,
+            )
         }
     }
 }
